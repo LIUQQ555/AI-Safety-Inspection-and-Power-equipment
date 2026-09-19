@@ -1,0 +1,300 @@
+# ===========================================================================
+# 风险规则库
+# ---------------------------------------------------------------------------
+# 技术方案第十五节：风险判断分三部分 —— AI检测结果、规则判断、大模型解释。
+# 本文件承载「规则判断」部分，其输出 RuleScore 参与最终 RiskScore 加权。
+#
+# 说明：规则以配置驱动，新增设备类型只需追加规则，无需改动 Python 代码。
+#
+# 上下文可用字段（由 inspection_service 汇总所有模态结果后构造）：
+#   红外 thermal:    max_temp_c, mean_temp_c, ambient_temp_c,
+#                    baseline_temp_c, baseline_source, delta_temp_c,
+#                    relative_delta_ratio, thermal_severity,
+#                    hot_region_count, abnormal_region_count,
+#                    three_phase_imbalance_c, thermal_score
+#   可见光 visual:   defect_count, defect_classes, max_defect_confidence,
+#                    device_count, device_classes, visual_score
+#   时序 electrical: electrical_score, is_anomaly, anomaly_ratio,
+#                    load_rise_ratio, temp_rise_ratio, load_trend_slope,
+#                    voltage_deviation_ratio, current_imbalance_ratio,
+#                    max_zscore, peak_to_peak
+#   融合 fusion:     visual_score, thermal_score, electrical_score,
+#                    modalities_present, modalities_abnormal
+# ===========================================================================
+
+version: "1.0"
+device: "transformer"
+
+rules:
+  # -------------------------------------------------------------------------
+  # 红外 / 温度类规则
+  # 依据：《带电设备红外诊断应用规范》DL/T 664 的相对温差（ΔT）判据思路
+  # -------------------------------------------------------------------------
+  - id: TEMP_ABSOLUTE_CRITICAL
+    name: "绝对温度达严重异常"
+    modality: thermal
+    enabled: true
+    description: "红外检测到设备表面绝对温度达到严重异常水平，存在烧损风险。"
+    condition:
+      type: threshold
+      field: "max_temp_c"
+      operator: ">="
+      value: 110.0
+    severity: 95
+    standard: "DL/T 664《带电设备红外诊断应用规范》—— 绝对温度法判据"
+    advice: "立即安排停电检查，重点排查接线端子接触电阻、载流回路连接状态与内部放电迹象。"
+
+  - id: TEMP_ABSOLUTE_HIGH
+    name: "绝对温度超限"
+    modality: thermal
+    enabled: true
+    description: "红外检测到设备表面绝对温度超过告警值。"
+    condition:
+      type: threshold
+      field: "max_temp_c"
+      operator: ">="
+      value: 90.0
+    severity: 75
+    standard: "DL/T 664《带电设备红外诊断应用规范》—— 绝对温度法判据"
+    advice: "安排计划性检修，检查发热部位连接件紧固状态并测量回路电阻。"
+
+  # 注意 ΔT 的含义：发热点温度 − **正常相对应点温度**（三相设备取最低相），
+  # 不是减环境温度。详见 backend/vision/infrared_detector.py::_reference_temperature
+  - id: DELTA_TEMP_CRITICAL
+    name: "相对温差严重"
+    modality: thermal
+    enabled: true
+    description: "发热部位与正常相对应点的温差 ΔT 达严重级别，提示回路存在明显接触不良或断股。"
+    condition:
+      type: threshold
+      field: "delta_temp_c"
+      operator: ">="
+      value: 40.0
+    severity: 90
+    standard: "DL/T 664《带电设备红外诊断应用规范》—— 相对温差法判据"
+    advice: "判定为严重缺陷，需尽快安排处理，运行中加强红外跟踪测温。"
+
+  - id: DELTA_TEMP_HIGH
+    name: "相对温差超标"
+    modality: thermal
+    enabled: true
+    description: "发热部位与正常相对应点的温差 ΔT 超过一般缺陷阈值。"
+    condition:
+      type: threshold
+      field: "delta_temp_c"
+      operator: ">="
+      value: 20.0
+    severity: 60
+    standard: "DL/T 664《带电设备红外诊断应用规范》—— 相对温差法判据"
+    advice: "列为一般缺陷，纳入下次检修计划，加强巡检频次。"
+
+  - id: DELTA_TEMP_NOTICE
+    name: "相对温差接近告警"
+    modality: thermal
+    enabled: true
+    description: "发热部位与正常相对应点的温差 ΔT 明显高于同类部位，尚未达到缺陷阈值。"
+    condition:
+      type: threshold
+      field: "delta_temp_c"
+      operator: ">="
+      value: 10.0
+    severity: 40
+    standard: "DL/T 664《带电设备红外诊断应用规范》—— 相对温差法判据"
+    advice: "暂不构成缺陷，缩短红外测温周期观察发展趋势。"
+
+  - id: THREE_PHASE_IMBALANCE
+    name: "三相温度不平衡"
+    modality: thermal
+    enabled: true
+    description: "三相设备最大温差超过不平衡阈值，可能存在单相接触不良。"
+    condition:
+      type: threshold
+      field: "three_phase_imbalance_c"
+      operator: ">="
+      value: 10.0
+    severity: 65
+    standard: "DL/T 664《带电设备红外诊断应用规范》—— 同类设备比较法"
+    advice: "对比三相电流值，排查温度最高相的载流回路连接状况。"
+
+  # 用 abnormal_region_count 而不是 hot_region_count：
+  # 三相设备本来就有三个接线端子，都会被提取成热点，
+  # 但那属于正常结构，不代表「多点过热」。
+  - id: THERMAL_MULTI_HOTSPOT
+    name: "多点过热"
+    modality: thermal
+    enabled: true
+    description: "红外图像中出现多个达到告警级别的热点区域，可能存在系统性发热问题。"
+    condition:
+      type: threshold
+      field: "abnormal_region_count"
+      operator: ">="
+      value: 2
+    severity: 55
+    standard: "DL/T 664《带电设备红外诊断应用规范》"
+    advice: "对全部热点区域逐一排查，优先处理负载电流较大的回路。"
+
+  # -------------------------------------------------------------------------
+  # 可见光 / 外观缺陷类规则
+  # -------------------------------------------------------------------------
+  - id: VISUAL_OIL_LEAK
+    name: "渗漏油缺陷"
+    modality: visual
+    enabled: true
+    description: "可见光检测到变压器渗漏油痕迹。"
+    condition:
+      type: contains
+      field: "defect_classes"
+      value: "oil_leak"
+    severity: 70
+    standard: "DL/T 572《电力变压器运行规程》—— 外观检查要求"
+    advice: "检查密封件老化情况与阀门状态，评估油位下降速率，必要时安排补油与堵漏。"
+
+  - id: VISUAL_BROKEN_PART
+    name: "部件破损"
+    modality: visual
+    enabled: true
+    description: "可见光检测到设备部件破损。"
+    condition:
+      type: contains
+      field: "defect_classes"
+      value: "broken_part"
+    severity: 85
+    standard: "DL/T 572《电力变压器运行规程》—— 外观检查要求"
+    advice: "破损部件可能影响绝缘或机械强度，应尽快安排更换。"
+
+  - id: VISUAL_DEFORMATION
+    name: "结构变形"
+    modality: visual
+    enabled: true
+    description: "可见光检测到设备结构变形。"
+    condition:
+      type: contains
+      field: "defect_classes"
+      value: "deformation"
+    severity: 65
+    standard: "DL/T 572《电力变压器运行规程》—— 外观检查要求"
+    advice: "检查变形是否由外力冲击或内部压力异常导致，评估是否影响安全运行。"
+
+  - id: VISUAL_FOREIGN_OBJECT
+    name: "悬挂异物"
+    modality: visual
+    enabled: true
+    description: "可见光检测到设备上悬挂异物（风筝、气球、鸟巢等）。"
+    condition:
+      type: any_of
+      subconditions:
+        - {type: contains, field: "defect_classes", value: "foreign_object"}
+        - {type: contains, field: "defect_classes", value: "nest"}
+    severity: 60
+    standard: "DL/T 741《架空输电线路运行规程》—— 通道隐患处理"
+    advice: "异物可能引起相间短路，应尽快带电清除或安排停电处理。"
+
+  # -------------------------------------------------------------------------
+  # 电气时序类规则
+  # -------------------------------------------------------------------------
+  - id: ELEC_LOAD_RISING
+    name: "负荷持续升高"
+    modality: electrical
+    enabled: true
+    description: "时序数据显示近期负荷显著高于基线水平，可能加速设备发热。"
+    condition:
+      type: threshold
+      field: "load_rise_ratio"
+      operator: ">="
+      value: 0.25
+    severity: 50
+    standard: "DL/T 572《电力变压器运行规程》—— 负载电流监视"
+    advice: "核对负载计划与实际出力，评估是否需转移负荷，关注对应回路温升。"
+
+  - id: ELEC_OVERLOAD
+    name: "负载率偏高"
+    modality: electrical
+    enabled: true
+    description: "时序数据显示负载率接近或超过额定水平。"
+    condition:
+      type: threshold
+      field: "max_load_ratio"
+      operator: ">="
+      value: 0.9
+    severity: 60
+    standard: "DL/T 572《电力变压器运行规程》—— 允许负载范围"
+    advice: "确认变压器额定容量与当前负载，必要时限负荷运行并加强测温。"
+
+  - id: ELEC_ANOMALY
+    name: "时序异常检测告警"
+    modality: electrical
+    enabled: true
+    description: "时序模型在监测窗口内检出异常模式。"
+    condition:
+      type: threshold
+      field: "electrical_score"
+      operator: ">="
+      value: 65.0
+    severity: 60
+    standard: "状态检修导则 —— 在线监测数据异常处理"
+    advice: "调取该时段完整波形与运行记录，确认异常是否对应操作或故障事件。"
+
+  - id: ELEC_VOLTAGE_DEVIATION
+    name: "电压偏差超限"
+    modality: electrical
+    enabled: true
+    description: "电压偏离额定值超过允许范围。"
+    condition:
+      type: threshold
+      field: "voltage_deviation_ratio"
+      operator: ">="
+      value: 0.07
+    severity: 45
+    standard: "GB/T 12325《电能质量 供电电压偏差》"
+    advice: "核查无功补偿投切状态与调压措施是否正常。"
+
+  - id: ELEC_CURRENT_IMBALANCE
+    name: "三相电流不平衡"
+    modality: electrical
+    enabled: true
+    description: "三相电流不平衡度超过允许值。"
+    condition:
+      type: threshold
+      field: "current_imbalance_ratio"
+      operator: ">="
+      value: 0.15
+    severity: 55
+    standard: "GB/T 15543《电能质量 三相电压不平衡》"
+    advice: "排查单相负荷分配与接点接触状况，必要时调整负荷分配。"
+
+  # -------------------------------------------------------------------------
+  # 多模态一致性规则（技术方案第六节的核心：模态间关联分析）
+  # -------------------------------------------------------------------------
+  - id: MULTIMODAL_CONSISTENT_OVERHEAT
+    name: "多模态一致指向过热"
+    modality: fusion
+    enabled: true
+    description: >
+      可见光、红外、时序三个模态同时指向异常，且时序显示负荷升高。
+      对应技术方案第六节的典型场景：视觉发现接线端子 + 红外发现该位置温升
+      + 时序发现负荷持续升高。
+    condition:
+      type: all_of
+      subconditions:
+        - {type: threshold, field: "thermal_score",    operator: ">=", value: 60}
+        - {type: threshold, field: "electrical_score", operator: ">=", value: 50}
+        - {type: threshold, field: "load_rise_ratio",  operator: ">=", value: 0.15}
+    severity: 88
+    standard: "DL/T 664 + DL/T 572 —— 多源数据联合诊断"
+    advice: >
+      三个模态结论互相印证，可信度高。建议重点检查载流回路（接线端子、线夹、
+      套管将军帽）的紧固状态与接触电阻，并结合近期负荷情况评估发展趋势。
+
+  - id: VISUAL_THERMAL_LOCATION_MATCH
+    name: "视觉与红外位置吻合"
+    modality: fusion
+    enabled: true
+    description: "可见光缺陷位置与红外热点位置在空间上重合，缺陷定位可信。"
+    condition:
+      type: all_of
+      subconditions:
+        - {type: threshold, field: "visual_thermal_iou", operator: ">=", value: 0.05}
+        - {type: threshold, field: "thermal_score",       operator: ">=", value: 50}
+    severity: 72
+    standard: "DL/T 664 —— 红外与可见光联合定位"
+    advice: "缺陷位置已在可见光与红外两路数据中同时确认，可直接安排针对性检修。"

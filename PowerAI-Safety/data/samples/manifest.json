@@ -1,0 +1,124 @@
+{
+  "generated_at": "2026-09-19T17:27:46",
+  "seed": 42,
+  "temperature_range_c": [
+    0.0,
+    150.0
+  ],
+  "note": "合成数据，仅用于打通流程与回归测试，不代表真实缺陷形态与温度分布。",
+  "scenarios": [
+    {
+      "scenario": "normal",
+      "title": "正常运行",
+      "visible": "normal\\normal_visible.jpg",
+      "thermal_radiometric": "normal\\normal_thermal.png",
+      "thermal_pseudo_color": "normal\\normal_thermal_ironbow.jpg",
+      "thermal_calibration": "normal\\normal_thermal_ironbow.jpg.calib.json",
+      "timeseries": "normal\\normal_timeseries.csv",
+      "ground_truth": {
+        "visible_defects": [],
+        "phase_temps_c": [
+          38.0,
+          39.2,
+          40.1
+        ],
+        "max_temp_c": 40.78,
+        "ambient_reference_c": 26.0,
+        "series_pattern": "normal",
+        "expected_thermal_severity": "warning"
+      }
+    },
+    {
+      "scenario": "oil_leak",
+      "title": "渗漏油（可见光缺陷，温度轻度偏高）",
+      "visible": "oil_leak\\oil_leak_visible.jpg",
+      "thermal_radiometric": "oil_leak\\oil_leak_thermal.png",
+      "thermal_pseudo_color": "oil_leak\\oil_leak_thermal_ironbow.jpg",
+      "thermal_calibration": "oil_leak\\oil_leak_thermal_ironbow.jpg.calib.json",
+      "timeseries": "oil_leak\\oil_leak_timeseries.csv",
+      "ground_truth": {
+        "visible_defects": [
+          "oil_leak",
+          "oil_stain"
+        ],
+        "phase_temps_c": [
+          44.0,
+          45.5,
+          46.8
+        ],
+        "max_temp_c": 47.4,
+        "ambient_reference_c": 26.0,
+        "series_pattern": "normal",
+        "expected_thermal_severity": "alarm"
+      }
+    },
+    {
+      "scenario": "overheat",
+      "title": "接线端子过热（红外严重，可见光无异常）",
+      "visible": "overheat\\overheat_visible.jpg",
+      "thermal_radiometric": "overheat\\overheat_thermal.png",
+      "thermal_pseudo_color": "overheat\\overheat_thermal_ironbow.jpg",
+      "thermal_calibration": "overheat\\overheat_thermal_ironbow.jpg.calib.json",
+      "timeseries": "overheat\\overheat_timeseries.csv",
+      "ground_truth": {
+        "visible_defects": [],
+        "phase_temps_c": [
+          52.0,
+          55.0,
+          96.5
+        ],
+        "max_temp_c": 97.26,
+        "ambient_reference_c": 26.0,
+        "series_pattern": "load_rise",
+        "expected_thermal_severity": "critical"
+      }
+    },
+    {
+      "scenario": "critical",
+      "title": "多模态一致异常（破损 + 严重过热 + 电流突变）",
+      "visible": "critical\\critical_visible.jpg",
+      "thermal_radiometric": "critical\\critical_thermal.png",
+      "thermal_pseudo_color": "critical\\critical_thermal_ironbow.jpg",
+      "thermal_calibration": "critical\\critical_thermal_ironbow.jpg.calib.json",
+      "timeseries": "critical\\critical_timeseries.csv",
+      "ground_truth": {
+        "visible_defects": [
+          "broken_part",
+          "rust"
+        ],
+        "phase_temps_c": [
+          58.0,
+          61.0,
+          118.0
+        ],
+        "max_temp_c": 118.64,
+        "ambient_reference_c": 26.0,
+        "series_pattern": "current_spike",
+        "expected_thermal_severity": "critical"
+      }
+    },
+    {
+      "scenario": "foreign_object",
+      "title": "悬挂异物（可见光缺陷，温度正常）",
+      "visible": "foreign_object\\foreign_object_visible.jpg",
+      "thermal_radiometric": "foreign_object\\foreign_object_thermal.png",
+      "thermal_pseudo_color": "foreign_object\\foreign_object_thermal_ironbow.jpg",
+      "thermal_calibration": "foreign_object\\foreign_object_thermal_ironbow.jpg.calib.json",
+      "timeseries": "foreign_object\\foreign_object_timeseries.csv",
+      "ground_truth": {
+        "visible_defects": [
+          "foreign_object"
+        ],
+        "phase_temps_c": [
+          36.5,
+          37.4,
+          38.2
+        ],
+        "max_temp_c": 39.18,
+        "ambient_reference_c": 26.0,
+        "series_pattern": "normal",
+        "expected_thermal_severity": "warning"
+      }
+    }
+  ]
+}

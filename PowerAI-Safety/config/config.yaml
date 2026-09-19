@@ -1,0 +1,290 @@
+# ===========================================================================
+# PowerAI-Safety 主配置
+# ---------------------------------------------------------------------------
+# 技术方案第六节明确要求：
+#   「这里的阈值应作为项目配置项，不应由大模型自由生成。」
+# 因此本文件中所有阈值、权重、分级边界均为系统唯一事实来源，
+# 大模型（LLMProvider）在任何情况下都不得改写这些数值，只能引用和解释。
+# ===========================================================================
+
+app:
+  name: "电力设备多模态AI安全检测系统"
+  version: "0.1.0"
+  # 相对路径均以项目根目录为基准解析
+  data_dir: "data"
+  upload_dir: "data/uploads"
+  report_dir: "data/reports"
+  db_path: "data/powerai.db"
+  log_level: "INFO"
+
+# ---------------------------------------------------------------------------
+# 检测目标设备
+# ---------------------------------------------------------------------------
+# MVP 阶段聚焦单一设备闭环（技术方案第十九节建议），
+# 后续扩展绝缘子/断路器/避雷器只需扩充 vision.*.classes 与 config/rules.yaml。
+device:
+  focus: "transformer"          # transformer | insulator | ...
+  display_name: "变压器"
+
+# ---------------------------------------------------------------------------
+# 模型权重与训练产物
+# ---------------------------------------------------------------------------
+# 目录不存在时由训练脚本自动创建；权重文件不存在时对应分支自动降级
+# （可见光 → 启发式兜底；时序 → 统计判据），并在结果中标注 backend。
+models:
+  dir: "models"
+  yolo_dir: "models/yolo"
+  timeseries_dir: "models/timeseries"
+  infrared_dir: "models/infrared"
+
+# ---------------------------------------------------------------------------
+# 视觉检测分支
+# ---------------------------------------------------------------------------
+vision:
+  visible:
+    # YOLO 权重路径。文件不存在时自动降级为启发式检测器（结果中会标注 backend 字段）
+    weights: "models/yolo/transformer_visible.pt"
+    fallback_weights: "yolov8n.pt"   # 可选：ultralytics 自动下载的通用权重
+    conf_threshold: 0.25
+    iou_threshold: 0.45
+    imgsz: 640
+    device: "cpu"                    # 无 NVIDIA GPU，固定 CPU
+    max_detections: 50
+    # 允许检测的设备与缺陷类别
+    # 设备类（正常目标）
+    device_classes:
+      - "transformer"
+      - "bushing"          # 套管
+      - "terminal"         # 接线端子
+      - "conservator"      # 储油柜
+      - "radiator"         # 散热器
+    # 缺陷类（异常目标）
+    defect_classes:
+      - "oil_leak"         # 渗漏油
+      - "rust"             # 锈蚀
+      - "deformation"      # 变形
+      - "foreign_object"   # 悬挂异物
+      - "broken_part"      # 部件破损
+      - "oil_stain"        # 油污
+    # 每类缺陷对视觉分（0-100）的贡献权重
+    defect_severity:
+      oil_leak: 0.85
+      broken_part: 0.90
+      deformation: 0.70
+      rust: 0.45
+      foreign_object: 0.60
+      oil_stain: 0.35
+    # 启发式兜底检测器的参数（无 YOLO 权重时生效）
+    heuristic:
+      min_area_ratio: 0.004     # 候选区域最小面积占比
+      max_area_ratio: 0.60      # 候选区域最大面积占比
+      canny_low: 50
+      canny_high: 150
+      max_candidates: 8
+
+  infrared:
+    # ---- 温度映射 ----
+    # 红外图像的像素值需要映射到物理温度。两种情形：
+    #   1. 标定文件（.tiff/.txt）存在 → 使用真实辐射温度
+    #   2. 仅有伪彩色/灰度图 → 按下面配置的线性区间做相对温度映射
+    # 伪彩色图的温度区间务必按实际相机设置修改，否则绝对温度判断无意义。
+    temp_min_c: 0.0            # 像素值 0 对应的温度
+    temp_max_c: 150.0          # 像素值 255 对应的温度
+    ambient_temp_c: 25.0       # 环境参考温度（用于计算温升 ΔT）
+    auto_ambient_percentile: 10.0   # 若 ambient_temp_c 为 null，用图像第 10 百分位作环境温度
+
+    # ---- 绝对温度阈值（℃）----
+    absolute_warning_c: 70.0
+    absolute_alarm_c: 90.0
+    absolute_critical_c: 110.0
+
+    # ---- 相对温升 ΔT 阈值（℃）---- 电力行业一般关注 ΔT > 10K
+    delta_warning_c: 10.0
+    delta_alarm_c: 20.0
+    delta_critical_c: 40.0
+
+    # ---- 三相温度不平衡（最大相温差，℃）----
+    three_phase_imbalance_warning_c: 10.0
+    three_phase_imbalance_alarm_c: 20.0
+
+    # ---- 热点提取 ----
+    hot_region_percentile: 95.0   # 像素值高于该百分位视为候选热点
+    min_region_area: 25           # 最小连通域面积（像素）
+    max_regions: 8
+    # 各级别对应的热风险分（0-100）
+    severity_score:
+      normal: 5
+      warning: 45
+      alarm: 75
+      critical: 95
+
+# ---------------------------------------------------------------------------
+# 电气时序分支
+# ---------------------------------------------------------------------------
+timeseries:
+  # 期望的采样间隔（分钟），用于重采样
+  sampling_interval_min: 15
+  # 滑动窗口
+  window_size: 96            # 96 × 15min = 24 小时
+  stride: 24                 # 步长 6 小时
+  # 预处理
+  denoise_window: 5          # 移动平均窗口（点）
+  normalize: "zscore"        # zscore | minmax | none
+  clip_sigma: 5.0            # 归一化前裁剪极端值
+  # 频域特征
+  fft_top_k: 5               # 保留能量最高的 k 个频率分量
+  stft:
+    nperseg: 32
+    noverlap: 16
+
+  # 关注的信号通道（CSV 列名，大小写不敏感）
+  channels:
+    - "voltage"
+    - "current"
+    - "power"
+    - "temperature"
+    - "load"
+
+  # ---- 设备额定参数：用于把原始量换算为可比指标 ----
+  # 变压器额定容量（kW）。负荷通道若为 kW（数值 > 2），按此换算负载率；
+  # 若负荷通道本身已是标幺值（数值 ≤ 2），则直接作为负载率使用。
+  rated_capacity_kw: 1000.0
+  # 额定电压（kV）。用于计算电压偏差率 |V - V_额定| / V_额定。
+  # 设为 null 时改用序列中位数作为额定值估算。
+  rated_voltage_kv: null
+
+  # 三相通道命名（若 CSV 中提供 A/B/C 分相数据则自动识别并计算不平衡度）
+  phase_channels:
+    voltage: ["voltage_a", "voltage_b", "voltage_c"]
+    current: ["current_a", "current_b", "current_c"]
+
+  model:
+    d_model: 64
+    nhead: 4
+    num_layers: 2
+    dim_feedforward: 128
+    dropout: 0.1
+    epochs: 40
+    batch_size: 32
+    learning_rate: 0.001
+    weight_decay: 0.0001
+    seed: 42
+
+  anomaly:
+    # 重建误差超过该分位数的窗口判定为异常
+    error_percentile: 95.0
+    # 统计兜底检测器（无训练模型时生效）
+    zscore_window: 96
+    # 时序异常分（0-100）到分数的映射上限
+    max_score: 100.0
+
+    # ---- 统计判据各指标的阈值 ----
+    # 低于 warning 得 0 分，达到 critical 得 100 分，中间线性插值，
+    # 最终取各指标中**最严重**的一个作为电气异常分（不相加，避免同一根因重复计分）。
+    #
+    # zscore_factor_* 用「z 峰值 ÷ 纯噪声预期值」而不是 z 的绝对值：
+    # n 个标准正态样本的最大 |z| 期望约为 sqrt(2·ln(2n))，n=96 时就有 3.2，
+    # 所以固定阈值 3.0 会把大量正常序列判成异常。
+    # 参见 backend/timeseries/anomaly_detector.py::expected_max_z
+    statistical:
+      zscore_factor_warning: 1.15     # 峰值达到噪声预期的 1.15 倍
+      zscore_factor_critical: 2.0     # 达到 2 倍视为明确异常
+      load_rise_warning: 0.25         # 近期负荷比基线上升 25%
+      load_rise_critical: 0.80
+      voltage_deviation_warning: 0.07  # GB/T 12325: 10kV 及以下 ±7%
+      voltage_deviation_critical: 0.15
+      current_imbalance_warning: 0.15  # 三相电流不平衡度
+      current_imbalance_critical: 0.30
+      load_ratio_warning: 0.90         # 负载率（需配置 rated_capacity_kw）
+      load_ratio_critical: 1.05        # 超过 1.0 即过载
+
+# ---------------------------------------------------------------------------
+# 多模态融合
+# ---------------------------------------------------------------------------
+# 技术方案第六节：RiskScore = w1*VisualScore + w2*ThermalScore
+#                            + w3*ElectricalScore + w4*RuleScore
+# 当某模态数据缺失时，其权重被剔除并对剩余权重重新归一化（见 risk_fusion.py）。
+fusion:
+  weights:
+    visual: 0.30
+    thermal: 0.35
+    electrical: 0.20
+    rule: 0.15
+  # 风险分级边界（闭区间下界，开区间上界）
+  levels:
+    - name: "正常"
+      code: "normal"
+      min: 0
+      max: 30
+      color: "#16a34a"
+    - name: "关注"
+      code: "attention"
+      min: 30
+      max: 60
+      color: "#ca8a04"
+    - name: "异常"
+      code: "abnormal"
+      min: 60
+      max: 80
+      color: "#ea580c"
+    - name: "严重异常"
+      code: "critical"
+      min: 80
+      max: 100
+      color: "#dc2626"
+  # 融合后的一致性调整：多模态同时指向异常时的置信度加成
+  consistency_bonus: 6.0     # 三个及以上模态都 > 60 分时加分
+  consistency_threshold: 60.0
+
+# ---------------------------------------------------------------------------
+# RAG 知识库
+# ---------------------------------------------------------------------------
+rag:
+  knowledge_dir: "knowledge"
+  index_dir: "data/index"
+  chunk_size: 480            # 字符数
+  chunk_overlap: 80
+  top_k: 4
+  min_score: 0.05            # 低于该相似度的检索结果丢弃
+  embedding:
+    # tfidf            → scikit-learn 字符 n-gram TF-IDF（离线可用，默认）
+    # sentence_transformers → 语义向量（需额外安装，缺失时自动回退 tfidf）
+    backend: "tfidf"
+    model: "shibing624/text2vec-base-chinese"
+    ngram_min: 2
+    ngram_max: 3
+
+# ---------------------------------------------------------------------------
+# 大模型（VLM/LLM）
+# ---------------------------------------------------------------------------
+# 技术方案第七节：大模型不承担底层检测，只负责「解释、归因、建议」。
+# provider=mock 时使用模板化生成，完全离线、确定性输出，用于打通全流程。
+llm:
+  provider: "mock"           # mock | dashscope | openai
+  timeout_s: 60
+  max_tokens: 1500
+  temperature: 0.2
+  # 传给 VLM 的图像最大边长，超过则缩放以控制 token 消耗
+  max_image_side: 1024
+
+  dashscope:
+    model: "qwen-vl-max"
+    base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    api_key_env: "DASHSCOPE_API_KEY"
+
+  openai:
+    model: "gpt-4o-mini"
+    base_url: "https://api.openai.com/v1"
+    api_key_env: "OPENAI_API_KEY"
+
+# ---------------------------------------------------------------------------
+# 报告
+# ---------------------------------------------------------------------------
+report:
+  title: "电力设备AI智能巡检报告"
+  include_images: true
+  include_raw_scores: true
+  # 报告中必须附带的免责声明：AI 结果需人工复核
+  disclaimer: >
+    本报告由 AI 系统自动生成，检测结论与风险等级基于配置阈值计算，
+    仅供运维人员参考，不能替代现场人工检验与专业判断。

@@ -1,0 +1,56 @@
+# PowerAI-Safety 依赖清单
+# ---------------------------------------------------------------------------
+# 环境说明（重要）
+# ---------------------------------------------------------------------------
+# 本项目的依赖安装在项目内的 .venv 中，该 venv 以 --system-site-packages 方式创建，
+# 因此 torch / pandas / numpy / scikit-learn 等直接从 Anaconda base 继承，
+# 无需重复下载（torch 约 2GB）。
+#
+# 创建方式：
+#     python -m venv --system-site-packages .venv
+#     .venv\Scripts\python -m pip install -r requirements.txt
+#
+# 注意：base 环境中的 opencv-python 4.7 是按 numpy 1.x 编译的，在 numpy 2.x 下
+# 无法导入（ImportError: numpy.core.multiarray failed to import）。因此本项目在
+# venv 内重新安装 opencv-python>=4.10，该版本覆盖 base 中的损坏版本。
+# ---------------------------------------------------------------------------
+
+# --- 由 base 环境继承，此处仅作版本记录，无需重复安装 ---
+# torch>=2.0          # 继承自 base (2.3.1)
+# torchvision         # 继承自 base
+# numpy>=1.24         # 继承自 base (2.2.4)
+# pandas>=2.0         # 继承自 base (2.2.3)
+# scikit-learn>=1.3   # 继承自 base (1.6.1)
+# matplotlib          # 继承自 base
+
+# --- venv 内必须安装 ---
+opencv-python>=4.10.0      # 图像预处理 / ROI / 标注 / 红外分析（覆盖 base 中的损坏版本）
+Pillow>=10.0.0             # 图像 IO（中文路径兼容性优于 cv2.imread）
+
+# --- 目标检测 ---
+ultralytics>=8.2.0         # YOLOv8/v11，可见光与红外检测分支
+                           # 许可证提示：Ultralytics 采用 AGPL-3.0，商业部署需另行处理
+
+# --- 后端服务 ---
+fastapi>=0.115.0
+uvicorn[standard]>=0.30.0
+python-multipart>=0.0.9    # FastAPI 文件上传必需
+
+# --- RAG 文档解析 ---
+pymupdf>=1.24.0            # PDF 解析（import fitz）
+python-docx>=1.1.0         # Word 文档解析
+jieba>=0.42.1              # 中文分词（纯 Python，无额外依赖；缺失时自动降级为字符 n-gram）
+
+# --- 配置 ---
+PyYAML>=6.0
+
+# --- 测试 ---
+pytest>=8.0.0
+httpx>=0.27.0              # FastAPI TestClient 依赖
+
+# ---------------------------------------------------------------------------
+# 可选依赖（按需安装，代码均做了缺失降级处理）
+# ---------------------------------------------------------------------------
+# sentence-transformers>=2.6.0   # 语义 embedding；未安装时 RAG 使用 TF-IDF 字符 n-gram
+# faiss-cpu>=1.8.0               # 向量检索；未安装时使用 numpy 余弦检索
+# python-Levenshtein             # 可选的字符串匹配加速

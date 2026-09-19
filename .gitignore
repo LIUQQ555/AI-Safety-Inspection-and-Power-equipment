@@ -1,0 +1,67 @@
+# ===========================================================================
+# PowerAI-Safety .gitignore
+# ===========================================================================
+
+# ---- Python 编译产物 ----
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# ---- 虚拟环境 ----
+# .venv 约 557MB，必须排除。依赖请用 requirements.txt 重建：
+#   python -m venv .venv && .venv/Scripts/pip install -r requirements.txt
+.venv/
+venv/
+env/
+ENV/
+
+# ---- 密钥与本地配置 ----
+# config/config.yaml 通过 api_key_env 引用环境变量，
+# 真实密钥只放在 .env 中，切勿提交。
+.env
+.env.*
+!.env.example
+*.local.yaml
+secrets/
+
+# ---- 运行时产物 ----
+# 这些目录每次运行都会重新生成，入库只会产生 diff 噪音。
+# 注意：仓库根在本目录（含 技术方案.md 与 PowerAI-Safety/），
+# 含中间斜杠的模式相对本文件所在目录解析，故须写出完整路径。
+PowerAI-Safety/data/uploads/
+PowerAI-Safety/data/reports/
+PowerAI-Safety/data/index/
+PowerAI-Safety/data/powerai.db
+PowerAI-Safety/data/powerai.db-*
+
+# ---- 模型权重（大文件，由训练脚本生成或按需下载）----
+*.pt
+*.pth
+*.onnx
+*.ckpt
+*.safetensors
+
+# ---- 内部文档（不公开）----
+# 项目技术方案：含开源项目复用计划、实施路线与创新点等内部内容，
+# 仅本地留存，不作为公开仓库的一部分。公开说明见 README.md。
+技术方案.md
+
+# ---- 日志 ----
+*.log
+logs/
+
+# ---- 编辑器与系统文件 ----
+.claude/
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+desktop.ini
